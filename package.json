@@ -1,0 +1,14 @@
+{
+  "name": "@modguard/desktop",
+  "productName": "ModGuard",
+  "version": "1.28.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Check a game mod before you install it — reads the mod, never runs it.",
+  "author": "ModGuard",
+  "homepage": "https://modguardian.com",
+  "type": "module",
+  "main": "dist/main/main.cjs",
+  "//": "Everything is bundled into dist/ by Vite and esbuild, so the packaged app ships no node_modules at all — which is why nothing here is a runtime dependency.",
+  "//electron-updater": "The one dependency this app has ever added for a reason other than building it. A security tool that cannot ship a fix to the people already running it is worse than one that can: until this, a fixed false positive or a new detection reached only people who happened to visit the site again. It is a devDependency like everything else because scripts/build.mjs marks only `electron` external, so esbuild inlines it into dist/main/main.cjs and the packaged app still carries no node_modules. Pinned at or above 6.3.9: CVE-2024-39698 (GHSA-9jxc-qjr9-vjxq) made the Windows updater verify a *different* file than the one it installed, and that fix landed in 6.3.0-alpha.6."
+}

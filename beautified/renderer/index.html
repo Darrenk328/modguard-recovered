@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en" data-boot="pending">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      The window loads only files inside the app bundle and is not allowed to
+      connect anywhere. This is enforced, not just promised.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'"
+    />
+    <title>ModGuard</title>
+
+    <!--
+      ======================================================================
+      THE ENTRANCE
+      ======================================================================
+
+      ModGuard does not get a splash screen. It gets an entrance, and the
+      difference is not a word game: a splash OCCUPIES time, while an entrance
+      is the home screen arriving, choreographed over time the app was going to
+      spend anyway. Nothing here waits for anything. There is no minimum dwell,
+      no timer, no progress bar, and nothing to skip.
+
+      ## The gap this covers, measured on the real bundles
+
+        ready-to-show          fires within 3ms of the first paint — which is an
+                               empty near-black rectangle
+        first CONTENTFUL paint 150-270ms later
+
+      That gap is the whole design problem. Every readiness signal in the app is
+      trivial: the slowest thing in the entire boot is `modFolders()` at 27-46ms,
+      the checker fork is 20-22ms, and all 32 font faces are `font-display: swap`
+      so they never block. THERE IS NO WORK TO NARRATE. That finding is what
+      makes a progress bar here a lie rather than merely unnecessary, and it is
+      why this plate says nothing at all in the happy path.
+
+      ## Why this is static HTML and not a React component
+
+      React's first commit IS the event that ends the gap. A React boot screen
+      can only paint after the moment it exists to cover, which forces a timer to
+      dismiss it — exactly the dishonesty this app's own doctrine forbids. And
+      the CSP above has no 'unsafe-inline' in `script-src`, so a plate with any
+      JavaScript in it could not run at all. Both constraints point the same way.
+
+      ## The trick
+
+      The reveal starts during document parse, roughly 90ms BEFORE the window is
+      visible. On a fast machine the user only ever sees the tail of it, so the
+      mark reads as already-there and settling rather than as something being
+      shown to them. On a slow machine they see the whole strike, and then a
+      shield breathing, which is a pleasant thing to look at rather than a wait.
+
+      The mark is never shown-then-dismissed. It is a permanent resident of the
+      home screen that simply arrives first: `--mg-hero-top` and `--mg-hero-h`
+      are shared with the home column, so when the plate cross-fades out the
+      crest behind it is at the identical coordinate and DOES NOT MOVE A PIXEL.
+
+      ## If the app is ready in 200ms
+
+      Then the plate was up for about 110ms, its strike is cut mid-way, and it
+      cross-fades out over 220ms. Cutting it mid-strike is safe precisely because
+      the strike's resting state is the CSS default — the mark is simply
+      complete. `pointer-events: none` goes on at the same instant the fade
+      starts, so a user faster than the fade can drop a file straight through it.
+    -->
+    <style>
+      /*
+        Two of these are duplicated from `index.css`. That is deliberate and it
+        is the point of the fallbacks: the plate has to lay out correctly even
+        in the frame before the app stylesheet has been applied, and a plate
+        that lays out differently from the home column is a plate whose crest
+        visibly jumps at handover. The fallback is the same number, written
+        twice, in the one place where a missing value would be visible.
+      */
+      #mg-boot {
+        position: fixed;
+        inset: 0;
+        z-index: 60;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        /*
+          Rail height plus the shared hero offset. This is the entire mechanism
+          by which the plate and the home screen agree on where the mark goes;
+          there is no JavaScript involved and there must never be.
+        */
+        padding-top: calc(var(--mg-rail-h, 56px) + var(--mg-hero-top, 56px));
+        background-color: #0b0a0e;
+        /*
+          `opacity` and `pointer-events` only. The plate never moves, so it
+          composites once and its removal costs the GPU nothing.
+        */
+        opacity: 1;
+        transition: opacity 220ms cubic-bezier(0.16, 1, 0.3, 1);
+        /*
+          THE ESCAPE HATCH. Do not remove this without reading the reason.
+
+          Everything else in this UI follows one rule: the final state is the
+          CSS default, and animation supplies only the *from*. The plate is the
+          single deliberate inversion of that rule — it is opaque by default and
+          only `data-boot="mounted"` clears it — because its whole job is to
+          cover the window before React exists.
+
+          That inversion has a failure mode the rest of the UI does not: if the
+          renderer bundle never evaluates, or `App` throws before its layout
+          effect runs, nothing ever sets `data-boot` and the user is left
+          staring at an opaque plate. The app does not look broken, it looks
+          DEAD — and a security tool that appears dead is one the person
+          uninstalls rather than reports.
+
+          So the plate also gives up on its own, in CSS, with no JavaScript
+          involved. 12s is deliberately far past the 4s and 8s slow-boot
+          messages below: this is a failsafe, not a timeout, and on the normal
+          path the handover has already happened in ~200ms.
+
+          It survives the motion system intact. The reduced-motion backstop
+          crushes `animation-duration` and pins `animation-iteration-count`, but
+          it does NOT crush `animation-delay` — so under [data-motion="off"]
+          this still fires at 12s and simply resolves instantly instead of
+          fading. Verified, not assumed.
+        */
+        animation: mg-boot-giveup 220ms linear 12000ms forwards;
+      }
+
+      @keyframes mg-boot-giveup {
+        to {
+          opacity: 0;
+          visibility: hidden;
+        }
+      }
+
+      /*
+        Handover. `App` sets this in a `useLayoutEffect`, which runs BEFORE the
+        browser paints React's first commit — so the fade begins on the same
+        frame the home screen becomes real, not one frame later.
+      */
+      html[data-boot="mounted"] #mg-boot {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      #mg-boot .mg-boot-crest {
+        height: var(--mg-hero-h, 176px);
+        /*
+          Stated rather than left to the viewBox's intrinsic ratio, because a
+          flex item sized only by height resolves its width during layout and
+          the home screen's `.mg-hero-slot` states both. Two boxes that agree
+          only by accident is a crest that shifts by a pixel at handover.
+        */
+        width: calc(var(--mg-hero-h, 176px) * 0.8);
+        /*
+          The halo needs about ten units of margin and the viewBox only has four
+          or five. Without this the glow is cropped into a rectangle, which is
+          the single most visible way this can go wrong.
+        */
+        overflow: visible;
+        /*
+          THE RESTING STATE IS THIS. A machine that never runs the animation
+          below — reduced motion, a stalled compositor, an engine that does not
+          like something here — shows a finished, correct mark. The keyframe
+          supplies only the *from*.
+        */
+        opacity: 1;
+        animation: mg-boot-strike 330ms cubic-bezier(0.16, 1, 0.3, 1) 90ms
+          backwards;
+      }
+
+      @keyframes mg-boot-strike {
+        from {
+          opacity: 0;
+          transform: scale(0.965);
+        }
+      }
+
+      /*
+        The breath enters at its midpoint on the RISING edge, so there is no
+        jump where the strike hands over to the loop.
+
+        The delay is written as a fraction of the shared token and NEVER as a
+        literal, because the plate and the app must agree on the period: if the
+        breath is ever retimed in `motion.css`, this follows it. A literal here
+        would be a second source of truth for one number, which is the exact
+        failure the mark's geometry constants exist to prevent.
+
+        No fallback value on the token, also deliberately, and the reason is
+        stronger than "avoid a duplicate": `--mg-breath` already HAS exactly one
+        home, in `:root` in `packages/report-ui/src/motion.css`, which
+        `index.css` imports. A fallback here would not be insurance — it would
+        be a second declaration of a number whose oddness is the whole point.
+
+        What actually happens if that token is missing, measured rather than
+        assumed: an unset `var()` anywhere inside the `animation` SHORTHAND
+        makes the entire property invalid at computed-value time, so the
+        shared `.mg-mark-alive .mg-mark-halo` rule collapses to
+        `animation: none` and the halo simply does not breathe. It does not
+        break, it does not flicker, and it does not half-run — it sits at its
+        resting `opacity: .45`, which in this design reads as "off" rather than
+        as "broken". Note that literalising the duration would NOT rescue it:
+        one unset var anywhere in the shorthand kills all of it, so there is no
+        partial-fallback middle ground to reach for.
+      */
+      #mg-boot .mg-mark-halo {
+        animation-delay: calc(var(--mg-breath) * -0.25);
+      }
+
+      /*
+        THE SLOW PATH, AND IT IS THE ONLY TEXT ON THIS SCREEN.
+
+        These earn their place by only ever appearing when they are true. A warm
+        boot is 0.62s, comfortably inside the 1s flow limit, so nobody sees
+        either of them; four seconds in, "the app is broken" is what a person is
+        starting to think, and one line converts that to "the app is starting."
+
+        `visibility: hidden` rather than `opacity: 0`, and this is a real gate
+        rather than fastidiousness: `scripts/smoke-test.cjs` asserts against
+        `document.body.innerText.slice(0, 400)`, and `innerText` INCLUDES
+        elements at zero opacity — it excludes only `display:none` and
+        `visibility:hidden`. A plate carrying visible-to-innerText text would
+        push the drop-target copy past 400 characters and fail the smoke gate.
+
+        No fill-mode during the delay, so they are genuinely absent until their
+        moment; `forwards` afterwards, so they stay. Under reduced motion the
+        durations are crushed to nothing but the DELAYS survive, which is the
+        correct degradation: the information arrives on time, without a fade.
+      */
+      #mg-boot [data-late] {
+        visibility: hidden;
+        opacity: 0;
+        margin-top: 2.5rem;
+        font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+        font-size: 13px;
+        line-height: 1.6;
+        color: #737373;
+      }
+      #mg-boot [data-late="4000"] {
+        animation:
+          mg-boot-late 300ms linear 4000ms forwards,
+          mg-boot-late-out 300ms linear 8000ms forwards;
+      }
+      #mg-boot [data-late="8000"] {
+        animation: mg-boot-late 300ms linear 8000ms forwards;
+      }
+      @keyframes mg-boot-late {
+        from {
+          visibility: visible;
+          opacity: 0;
+        }
+        to {
+          visibility: visible;
+          opacity: 1;
+        }
+      }
+      @keyframes mg-boot-late-out {
+        from {
+          visibility: visible;
+          opacity: 1;
+        }
+        to {
+          visibility: hidden;
+          opacity: 0;
+        }
+      }
+    </style>
+    <script type="module" crossorigin src="./assets/index-B9_4W8FR.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-fLB8pynK.css">
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <!--
+      The plate. After #root in document order so it composites above the app
+      without a stacking fight, and so that nothing in it can ever get in front
+      of the drop-target copy in `innerText`.
+
+      ==== THE MARK IS DUPLICATED HERE, AND THAT IS CHECKED ====================
+
+      This SVG is a hand-copy of `<Mark variant="metal" alive />` from
+      `packages/report-ui/src/Mark.tsx`, with every gradient, mask, clip and
+      filter id suffixed `-boot` so it can never collide with a React-rendered
+      mark on the same screen.
+
+      It has to be duplicated: the plate cannot import React, because React is
+      the thing it exists to cover. What makes that safe is not this comment —
+      it is `apps/desktop/test/boot-plate.test.ts`, which asserts the two `d`
+      strings below are byte-identical to `MARK_SHIELD_PATH` and `MARK_M_PATH`
+      as exported by `@modguard/report-ui`. One of the two copies is the source;
+      the other is checked against it. A note saying "keep these in sync" is not
+      a mechanism.
+    -->
+    <div id="mg-boot" data-boot aria-hidden="true">
+      <!--
+        The one tier-0 signal moment for the boot/home pair.
+
+        Boot and home are ONE screen — the plate is the home screen arriving —
+        so the strike is the whole of that screen's discrete-motion budget, and
+        the home React tree therefore spends none. If somebody later adds an
+        `mg-signal` to home, `motion-ladder.test.tsx` fails, and the right
+        question at that point is whether they meant to move this one.
+      -->
+      <svg
+        class="mg-mark mg-mark-alive mg-boot-crest mg-signal"
+        viewBox="0 0 80 100"
+        aria-hidden="true"
+      >
+        <defs>
+          <linearGradient id="mgFace-boot" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#EDF0F1" />
+            <stop offset="10%" stop-color="#D3D7DA" />
+            <stop offset="34%" stop-color="#9BA1A5" />
+            <stop offset="52%" stop-color="#838A8F" />
+            <!-- Brighter than the stop above it, on purpose. See Mark.tsx. -->
+            <stop offset="66%" stop-color="#8D9398" />
+            <stop offset="86%" stop-color="#5E6367" />
+            <stop offset="100%" stop-color="#4A4F53" />
+          </linearGradient>
+          <linearGradient id="mgRim-boot" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.92" />
+            <stop offset="22%" stop-color="#D8DCDE" />
+            <stop offset="55%" stop-color="#8A9094" />
+            <stop offset="78%" stop-color="#6B7175" />
+            <stop offset="100%" stop-color="#9CA2A6" stop-opacity="0.85" />
+          </linearGradient>
+          <linearGradient id="mgInk-boot" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#4E5357" />
+            <stop offset="40%" stop-color="#3A3F43" />
+            <stop offset="100%" stop-color="#2A2E31" />
+          </linearGradient>
+          <clipPath id="mgClip-boot">
+            <path
+              d="M39.6 3Q26.2 11.5 19.6 14.4Q13 17.3 8.2 18.5L3.4 19.6L2.5 21.9Q3.2 23.7 3.2 35.4Q3.1 47 5.1 54.4Q7.1 61.7 8.8 65.6Q10.5 69.6 14.4 75.6Q18.3 81.5 24.5 87L30.6 92.6Q33.8 92.8 36 94.2Q38.2 95.6 39.7 95.7L41.1 95.8Q46.2 92.8 48 92.6L49.7 92.4Q55.4 87.8 59.6 83.3Q63.9 78.8 67 73.7Q70 68.6 72.2 63Q74.3 57.3 75.6 52.2Q76.9 47 76.8 35.4Q76.8 23.7 77.2 22.1L77.5 20.5Q75.7 19.3 71.4 18.3Q67 17.3 63.8 16Q60.7 14.8 54.8 11.8Q49 8.7 45.4 6.1Q41.9 3.5 40.8 3.2Z"
+            />
+          </clipPath>
+          <mask id="mgLip-boot">
+            <path
+              d="M18.6 29.5L19.5 44.9L20.4 46L20.6 60.4L25.7 65.9L26.4 65.6L27.1 43.7L28.5 44.2L38.8 52.5L41.6 52.3L51.5 44.2L52.9 43.7L53.8 65.9L58.7 61.7L59.4 60.4L59.6 46L60.5 44.9L60.3 42.1L60.9 41Q60.9 33.6 61.2 31.9L61.4 30.2L61 29.2L57.9 29.2L40.2 42.8L22.1 29.2L20.7 28.8ZM49.7 53L48.7 53.2Q45.1 55.9 43.2 57.8L41.2 59.6L42.3 79.4L44.6 77.8L48.5 73.9L49.7 71.9L50.1 56.6L50.8 55.1ZM30.3 53L29.2 54.8L29.9 56.6L30.3 71.9L31.5 73.9L37.7 79.4L38.8 59.6Q34.9 55.9 33.1 54.6L31.3 53.2Z"
+              fill="#fff"
+            />
+            <path
+              d="M18.6 29.5L19.5 44.9L20.4 46L20.6 60.4L25.7 65.9L26.4 65.6L27.1 43.7L28.5 44.2L38.8 52.5L41.6 52.3L51.5 44.2L52.9 43.7L53.8 65.9L58.7 61.7L59.4 60.4L59.6 46L60.5 44.9L60.3 42.1L60.9 41Q60.9 33.6 61.2 31.9L61.4 30.2L61 29.2L57.9 29.2L40.2 42.8L22.1 29.2L20.7 28.8ZM49.7 53L48.7 53.2Q45.1 55.9 43.2 57.8L41.2 59.6L42.3 79.4L44.6 77.8L48.5 73.9L49.7 71.9L50.1 56.6L50.8 55.1ZM30.3 53L29.2 54.8L29.9 56.6L30.3 71.9L31.5 73.9L37.7 79.4L38.8 59.6Q34.9 55.9 33.1 54.6L31.3 53.2Z"
+              transform="translate(0,-0.9)"
+              fill="#000"
+            />
+          </mask>
+          <mask id="mgShade-boot">
+            <path
+              d="M18.6 29.5L19.5 44.9L20.4 46L20.6 60.4L25.7 65.9L26.4 65.6L27.1 43.7L28.5 44.2L38.8 52.5L41.6 52.3L51.5 44.2L52.9 43.7L53.8 65.9L58.7 61.7L59.4 60.4L59.6 46L60.5 44.9L60.3 42.1L60.9 41Q60.9 33.6 61.2 31.9L61.4 30.2L61 29.2L57.9 29.2L40.2 42.8L22.1 29.2L20.7 28.8ZM49.7 53L48.7 53.2Q45.1 55.9 43.2 57.8L41.2 59.6L42.3 79.4L44.6 77.8L48.5 73.9L49.7 71.9L50.1 56.6L50.8 55.1ZM30.3 53L29.2 54.8L29.9 56.6L30.3 71.9L31.5 73.9L37.7 79.4L38.8 59.6Q34.9 55.9 33.1 54.6L31.3 53.2Z"
+              fill="#fff"
+            />
+            <path
+              d="M18.6 29.5L19.5 44.9L20.4 46L20.6 60.4L25.7 65.9L26.4 65.6L27.1 43.7L28.5 44.2L38.8 52.5L41.6 52.3L51.5 44.2L52.9 43.7L53.8 65.9L58.7 61.7L59.4 60.4L59.6 46L60.5 44.9L60.3 42.1L60.9 41Q60.9 33.6 61.2 31.9L61.4 30.2L61 29.2L57.9 29.2L40.2 42.8L22.1 29.2L20.7 28.8ZM49.7 53L48.7 53.2Q45.1 55.9 43.2 57.8L41.2 59.6L42.3 79.4L44.6 77.8L48.5 73.9L49.7 71.9L50.1 56.6L50.8 55.1ZM30.3 53L29.2 54.8L29.9 56.6L30.3 71.9L31.5 73.9L37.7 79.4L38.8 59.6Q34.9 55.9 33.1 54.6L31.3 53.2Z"
+              transform="translate(0,0.9)"
+              fill="#000"
+            />
+          </mask>
+          <filter id="mgHalo-boot" x="-30%" y="-25%" width="160%" height="150%">
+            <feGaussianBlur stdDeviation="3.5" />
+          </filter>
+        </defs>
+
+        <g class="mg-mark-halo">
+          <path
+            class="mg-mark-halo-shape"
+            d="M39.6 3Q26.2 11.5 19.6 14.4Q13 17.3 8.2 18.5L3.4 19.6L2.5 21.9Q3.2 23.7 3.2 35.4Q3.1 47 5.1 54.4Q7.1 61.7 8.8 65.6Q10.5 69.6 14.4 75.6Q18.3 81.5 24.5 87L30.6 92.6Q33.8 92.8 36 94.2Q38.2 95.6 39.7 95.7L41.1 95.8Q46.2 92.8 48 92.6L49.7 92.4Q55.4 87.8 59.6 83.3Q63.9 78.8 67 73.7Q70 68.6 72.2 63Q74.3 57.3 75.6 52.2Q76.9 47 76.8 35.4Q76.8 23.7 77.2 22.1L77.5 20.5Q75.7 19.3 71.4 18.3Q67 17.3 63.8 16Q60.7 14.8 54.8 11.8Q49 8.7 45.4 6.1Q41.9 3.5 40.8 3.2Z"
+            fill="#ffffff"
+            fill-opacity="0.34"
+            filter="url(#mgHalo-boot)"
+          />
+        </g>
+
+        <g>
+          <path
+            d="M39.6 3Q26.2 11.5 19.6 14.4Q13 17.3 8.2 18.5L3.4 19.6L2.5 21.9Q3.2 23.7 3.2 35.4Q3.1 47 5.1 54.4Q7.1 61.7 8.8 65.6Q10.5 69.6 14.4 75.6Q18.3 81.5 24.5 87L30.6 92.6Q33.8 92.8 36 94.2Q38.2 95.6 39.7 95.7L41.1 95.8Q46.2 92.8 48 92.6L49.7 92.4Q55.4 87.8 59.6 83.3Q63.9 78.8 67 73.7Q70 68.6 72.2 63Q74.3 57.3 75.6 52.2Q76.9 47 76.8 35.4Q76.8 23.7 77.2 22.1L77.5 20.5Q75.7 19.3 71.4 18.3Q67 17.3 63.8 16Q60.7 14.8 54.8 11.8Q49 8.7 45.4 6.1Q41.9 3.5 40.8 3.2Z"
+            fill="url(#mgFace-boot)"
+          />
+          <path
+            d="M39.6 3Q26.2 11.5 19.6 14.4Q13 17.3 8.2 18.5L3.4 19.6L2.5 21.9Q3.2 23.7 3.2 35.4Q3.1 47 5.1 54.4Q7.1 61.7 8.8 65.6Q10.5 69.6 14.4 75.6Q18.3 81.5 24.5 87L30.6 92.6Q33.8 92.8 36 94.2Q38.2 95.6 39.7 95.7L41.1 95.8Q46.2 92.8 48 92.6L49.7 92.4Q55.4 87.8 59.6 83.3Q63.9 78.8 67 73.7Q70 68.6 72.2 63Q74.3 57.3 75.6 52.2Q76.9 47 76.8 35.4Q76.8 23.7 77.2 22.1L77.5 20.5Q75.7 19.3 71.4 18.3Q67 17.3 63.8 16Q60.7 14.8 54.8 11.8Q49 8.7 45.4 6.1Q41.9 3.5 40.8 3.2Z"
+            fill="none"
+            stroke="url(#mgRim-boot)"
+            stroke-width="4"
+            clip-path="url(#mgClip-boot)"
+          />
+          <path
+            d="M18.6 29.5L19.5 44.9L20.4 46L20.6 60.4L25.7 65.9L26.4 65.6L27.1 43.7L28.5 44.2L38.8 52.5L41.6 52.3L51.5 44.2L52.9 43.7L53.8 65.9L58.7 61.7L59.4 60.4L59.6 46L60.5 44.9L60.3 42.1L60.9 41Q60.9 33.6 61.2 31.9L61.4 30.2L61 29.2L57.9 29.2L40.2 42.8L22.1 29.2L20.7 28.8ZM49.7 53L48.7 53.2Q45.1 55.9 43.2 57.8L41.2 59.6L42.3 79.4L44.6 77.8L48.5 73.9L49.7 71.9L50.1 56.6L50.8 55.1ZM30.3 53L29.2 54.8L29.9 56.6L30.3 71.9L31.5 73.9L37.7 79.4L38.8 59.6Q34.9 55.9 33.1 54.6L31.3 53.2Z"
+            fill="url(#mgInk-boot)"
+          />
+          <path
+            d="M18.6 29.5L19.5 44.9L20.4 46L20.6 60.4L25.7 65.9L26.4 65.6L27.1 43.7L28.5 44.2L38.8 52.5L41.6 52.3L51.5 44.2L52.9 43.7L53.8 65.9L58.7 61.7L59.4 60.4L59.6 46L60.5 44.9L60.3 42.1L60.9 41Q60.9 33.6 61.2 31.9L61.4 30.2L61 29.2L57.9 29.2L40.2 42.8L22.1 29.2L20.7 28.8ZM49.7 53L48.7 53.2Q45.1 55.9 43.2 57.8L41.2 59.6L42.3 79.4L44.6 77.8L48.5 73.9L49.7 71.9L50.1 56.6L50.8 55.1ZM30.3 53L29.2 54.8L29.9 56.6L30.3 71.9L31.5 73.9L37.7 79.4L38.8 59.6Q34.9 55.9 33.1 54.6L31.3 53.2Z"
+            fill="#ffffff"
+            fill-opacity="0.3"
+            mask="url(#mgLip-boot)"
+          />
+          <path
+            d="M18.6 29.5L19.5 44.9L20.4 46L20.6 60.4L25.7 65.9L26.4 65.6L27.1 43.7L28.5 44.2L38.8 52.5L41.6 52.3L51.5 44.2L52.9 43.7L53.8 65.9L58.7 61.7L59.4 60.4L59.6 46L60.5 44.9L60.3 42.1L60.9 41Q60.9 33.6 61.2 31.9L61.4 30.2L61 29.2L57.9 29.2L40.2 42.8L22.1 29.2L20.7 28.8ZM49.7 53L48.7 53.2Q45.1 55.9 43.2 57.8L41.2 59.6L42.3 79.4L44.6 77.8L48.5 73.9L49.7 71.9L50.1 56.6L50.8 55.1ZM30.3 53L29.2 54.8L29.9 56.6L30.3 71.9L31.5 73.9L37.7 79.4L38.8 59.6Q34.9 55.9 33.1 54.6L31.3 53.2Z"
+            fill="#000000"
+            fill-opacity="0.4"
+            mask="url(#mgShade-boot)"
+          />
+        </g>
+      </svg>
+
+      <p data-late="4000">Still starting…</p>
+      <p data-late="8000">ModGuard is taking longer than usual to start.</p>
+    </div>
+
+  </body>
+</html>
